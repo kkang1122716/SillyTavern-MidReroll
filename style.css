@@ -132,6 +132,145 @@
     text-decoration: none;
 }
 
+/* replace mode: picked passage */
+.mr-para.mr-picked,
+.mr-para.mr-picked-split {
+    border-left-color: #e0a526;
+}
+
+.mr-para.mr-picked {
+    background: color-mix(in srgb, #e0a526 18%, transparent);
+}
+
+.mr-picked-inline {
+    background: color-mix(in srgb, #e0a526 30%, transparent);
+    border-radius: 3px;
+    padding: 0 1px;
+}
+
+.mr-mode-seg {
+    align-self: stretch;
+    display: flex;
+}
+
+.mr-mode-seg .mr-seg-btn {
+    flex: 1;
+    padding: 6px 10px;
+    font-size: 0.9em;
+}
+
+/* translation lines (popup only) */
+.mr-tr {
+    margin-top: 3px;
+    font-size: 0.88em;
+    opacity: 0.7;
+    border-top: 1px dotted var(--SmartThemeBorderColor);
+    padding-top: 3px;
+    user-select: none;
+    -webkit-user-select: none;
+    text-decoration: none;
+}
+
+.mr-para.mr-cut .mr-tr {
+    text-decoration: none;
+}
+
+.mr-tr-out {
+    white-space: pre-wrap;
+    font-size: 0.9em;
+    padding: 8px 10px;
+    border-radius: 8px;
+    background: var(--SmartThemeBlurTintColor);
+    border: 1px dashed var(--SmartThemeBorderColor);
+    line-height: 1.5;
+}
+
+.mr-chip.active {
+    border-color: var(--SmartThemeQuoteColor);
+    color: var(--SmartThemeQuoteColor);
+}
+
+.mr-chip:disabled {
+    opacity: 0.5;
+    cursor: wait;
+}
+
+/* result / compare popups */
+.mr-ctx {
+    font-size: 0.85em;
+    opacity: 0.5;
+    white-space: pre-wrap;
+    line-height: 1.45;
+}
+
+.mr-new-block {
+    padding: 8px 10px;
+    border-left: 3px solid #4caf7d;
+    border-radius: 8px;
+    background: color-mix(in srgb, #4caf7d 10%, transparent);
+    line-height: 1.55;
+}
+
+.mr-new-block p,
+.mr-old-text p {
+    margin: 0 0 0.5em;
+}
+
+.mr-new-block q::before,
+.mr-new-block q::after,
+.mr-old-text q::before,
+.mr-old-text q::after {
+    content: none;
+}
+
+.mr-cmp {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 10px;
+}
+
+@media (max-width: 700px) {
+    .mr-cmp {
+        grid-template-columns: 1fr;
+    }
+}
+
+.mr-cmp-col {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding: 8px;
+    border-radius: 10px;
+    min-width: 0;
+}
+
+.mr-old {
+    border: 1px solid color-mix(in srgb, #d9534f 50%, transparent);
+    background: color-mix(in srgb, #d9534f 7%, transparent);
+}
+
+.mr-new {
+    border: 1px solid color-mix(in srgb, #4caf7d 55%, transparent);
+    background: color-mix(in srgb, #4caf7d 7%, transparent);
+}
+
+.mr-cmp-label {
+    font-weight: 600;
+    font-size: 0.9em;
+}
+
+.mr-old-text {
+    line-height: 1.55;
+    opacity: 0.85;
+}
+
+.mr-new-edit {
+    margin: 0;
+    resize: vertical;
+    min-height: 6em;
+    line-height: 1.5;
+}
+
 .mr-marker {
     display: flex;
     align-items: center;
