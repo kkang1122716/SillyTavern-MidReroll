@@ -367,6 +367,71 @@
     text-decoration: underline;
 }
 
+/* light send (replace mode) */
+.mr-light {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding: 8px 10px;
+    border-radius: 8px;
+    background: var(--SmartThemeBlurTintColor);
+}
+
+.mr-light .mr-inline {
+    gap: 4px 12px;
+}
+
+.mr-light-num.text_pole {
+    flex: none;
+    width: 4.5em;
+}
+
+.mr-light-wi-wrap > summary {
+    cursor: pointer;
+    font-size: 0.9em;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.mr-light-wi-wrap[open] > summary {
+    margin-bottom: 4px;
+}
+
+.mr-light-wi {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    max-height: 30vh;
+    overflow-y: auto;
+    margin: 6px 0;
+}
+
+.mr-light-book {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.mr-light-book-name {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-weight: 600;
+    font-size: 0.88em;
+}
+
+.mr-light-entry {
+    font-size: 0.88em;
+    margin-left: 1.2em;
+}
+
+.mr-light-tag {
+    margin-left: 6px;
+    font-size: 0.85em;
+    opacity: 0.6;
+}
+
 /* prompt preview */
 .mr-pv-total {
     font-weight: 600;

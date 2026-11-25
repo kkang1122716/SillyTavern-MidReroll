@@ -109,6 +109,9 @@ const defaultSettings = Object.freeze({
     reviewContinue: 'foreign', // foreign | always | never
     announceAsNew: false,     // after a replace: send "new reply" signals instead of "edited"
     autoTranslateResult: true,
+    replaceSend: 'full',      // replace mode prompt: full (everything ST builds) | light (picked parts only)
+    lightTurns: 4,            // light: previous chat messages to send
+    lightParts: { description: true, personality: true, scenario: true, persona: true },
     injectDepth: 0,
     trimOverlap: true,
 });
@@ -131,6 +134,11 @@ function getSettings() {
         if (!Array.isArray(s.packs[lang].presets)) s.packs[lang].presets = structuredClone(DEFAULT_PACKS[lang].presets);
     }
     if (!DIR_CODE[s.dirLang]) s.dirLang = 'en';
+    if (typeof s.lightParts !== 'object' || !s.lightParts) s.lightParts = {};
+    for (const [k, v] of Object.entries(defaultSettings.lightParts)) {
+        if (!Object.hasOwn(s.lightParts, k)) s.lightParts[k] = v;
+    }
+    if (!['full', 'light'].includes(s.replaceSend)) s.replaceSend = 'full';
     return s;
 }
 const save = () => ctx().saveSettingsDebounced();
@@ -512,6 +520,7 @@ async function openPopup(mesId) {
         insertMode: s.insertMode,
         resultMode: s.resultMode,
         replaceResult: s.replaceResult,
+        send: s.replaceSend,
         showTr: false,
         tr: null,             // translated paragraphs
     };
@@ -591,6 +600,90 @@ async function openPopup(mesId) {
     const resultSegReplace = seg([['overwrite', '덮어쓰기'], ['swipe', '새 스와이프']],
         () => state.replaceResult, (v) => { state.replaceResult = v; });
 
+    // ----- light send (replace mode) -----
+    const lightBox = el('div', { class: 'mr-light' });
+    const wiBox = el('div', { class: 'mr-light-wi' });
+    const wiSummary = el('span', { class: 'mr-pv-state' });
+    let wiBooks = null;
+    let wiSeq = 0;
+    const drawWiSummary = () => {
+        if (!wiBooks) { wiSummary.textContent = '불러오는 중…'; return; }
+        const all = wiBooks.flatMap((bk) => bk.entries);
+        wiSummary.textContent = all.length ? `${all.length}개 중 ${all.filter((e) => e.picked).length}개 보냄` : '켜진 로어북 없음';
+    };
+    const drawWi = () => {
+        drawWiSummary();
+        if (!wiBooks) return;
+        if (!wiBooks.length) {
+            wiBox.replaceChildren(el('div', { class: 'mr-small', text: '켜져 있는 월드인포가 없어요.' }));
+            return;
+        }
+        const tag = (e) => (e.why === 'constant' ? '항상 켜짐' : e.why === 'key' ? '키워드 걸림' : '');
+        wiBox.replaceChildren(...wiBooks.map((bk) => el('div', { class: 'mr-light-book' },
+            el('div', { class: 'mr-light-book-name' },
+                el('span', { text: `📖 ${bk.name}` }),
+                el('button', { type: 'button', class: 'mr-link', text: '모두', onclick: () => pickAll(bk, true) }),
+                el('button', { type: 'button', class: 'mr-link', text: '없음', onclick: () => pickAll(bk, false) })),
+            bk.entries.map((e) => {
+                const box = el('input', { type: 'checkbox' });
+                box.checked = e.picked;
+                box.addEventListener('change', () => setPick(e, box.checked));
+                return el('label', { class: 'checkbox_label mr-light-entry', title: String(e.content).slice(0, 300) },
+                    box, el('span', { text: e.label }),
+                    el('span', { class: 'mr-light-tag', text: [tag(e), e.manual ? '직접 고름' : ''].filter(Boolean).join(' · ') }));
+            }))));
+    };
+    const setPick = (e, on, redraw = true) => {
+        const over = { ...wiOverrides() };
+        if (on === !!e.why) delete over[e.id]; else over[e.id] = on;
+        setWiOverrides(over);
+        e.picked = on;
+        e.manual = Object.hasOwn(over, e.id);
+        if (redraw) drawWi();
+    };
+    const pickAll = (bk, on) => { bk.entries.forEach((e) => setPick(e, on, false)); drawWi(); };
+    const loadWi = async () => {
+        const seq = ++wiSeq;
+        wiBooks = null;
+        drawWiSummary();
+        const books = await lightWorldInfo(mesId, s.lightTurns).catch((e) => { console.warn(LOG, e); return []; });
+        if (seq !== wiSeq) return;
+        wiBooks = books;
+        drawWi();
+    };
+    const turnsIn = el('input', { class: 'text_pole mr-light-num', type: 'number', min: 0, max: 50, value: s.lightTurns });
+    turnsIn.addEventListener('change', () => {
+        s.lightTurns = Math.max(0, Math.min(50, Number(turnsIn.value) || 0));
+        turnsIn.value = s.lightTurns;
+        save();
+        loadWi();
+    });
+    const partChecks = LIGHT_PARTS.map(([k, label]) => {
+        const box = el('input', { type: 'checkbox' });
+        box.checked = !!s.lightParts[k];
+        box.addEventListener('change', () => { s.lightParts[k] = box.checked; save(); });
+        return el('label', { class: 'checkbox_label mr-check' }, box, el('span', { text: label }));
+    });
+    const wiReset = el('button', { type: 'button', class: 'mr-link', text: '자동으로 다시 고르기', onclick: () => {
+        setWiOverrides(null);
+        loadWi();
+    } });
+    lightBox.append(
+        el('div', { class: 'mr-inline' }, el('span', { class: 'mr-small', text: '앞 대화' }), turnsIn, el('span', { class: 'mr-small', text: '개 (지금 답변은 항상 들어가요)' })),
+        el('div', { class: 'mr-inline' }, partChecks),
+        el('details', { class: 'mr-light-wi-wrap' },
+            el('summary', {}, el('span', { text: '월드인포 고르기 ' }), wiSummary),
+            el('small', { class: 'mr-note', text: '처음에는 항상 켜진 항목과, 보낼 글 안에 키워드가 있는 항목이 골라져 있어요. 직접 바꾼 건 이 채팅에서 기억해요.' }),
+            wiBox, wiReset),
+    );
+    const sendSeg = seg([['full', '전부 보내기'], ['light', '가볍게 보내기']],
+        () => state.send, (v) => {
+            state.send = v;
+            s.replaceSend = v;
+            save();
+            render();
+        });
+
     const chips = el('div', { class: 'mr-chips' },
         pack().presets.filter((p) => p?.name && p?.text).map((p) => el('button', {
             type: 'button', class: 'mr-chip', text: p.name, title: p.text,
@@ -624,6 +717,7 @@ async function openPopup(mesId) {
                 await showPromptPreview({
                     mesId, mode: state.mode, a: state.a, b: state.b,
                     insert: insertArea.value, insertMode: state.insertMode, direction: dirArea.value,
+                    light: state.send === 'light',
                 });
             } finally {
                 previewBtn.disabled = false;
@@ -644,6 +738,10 @@ async function openPopup(mesId) {
         insertArea);
     const resultRowContinue = el('div', { class: 'mr-row' }, el('span', { class: 'mr-small', text: '결과' }), resultSegContinue);
     const resultRowReplace = el('div', { class: 'mr-row' }, el('span', { class: 'mr-small', text: '결과' }), resultSegReplace);
+    const sendNote = el('small', { class: 'mr-note' });
+    const sendSection = el('div', { class: 'mr-section' },
+        el('div', { class: 'mr-row' }, el('div', { class: 'mr-label', text: '보내는 양' }), sendSeg),
+        sendNote, lightBox);
 
     const root = el('div', { class: 'mr-popup' },
         el('div', { class: 'mr-title' }, el('i', { class: 'fa-solid fa-scissors' }), ' 중간 리롤'),
@@ -652,6 +750,7 @@ async function openPopup(mesId) {
             el('div', { class: 'mr-row' }, pickLabel, trBtn),
             hint, textBox, status),
         insertSection,
+        sendSection,
         el('div', { class: 'mr-section' },
             el('div', { class: 'mr-label', text: '전개 지시 (선택)' }),
             chips, dirArea, dirNote),
@@ -716,6 +815,13 @@ async function openPopup(mesId) {
         if (state.showTr) hint.textContent += ' (번역 줄을 눌러도 그 문단이 골라져요)';
 
         insertSection.style.display = replace ? 'none' : '';
+        sendSection.style.display = replace ? '' : 'none';
+        const light = replace && state.send === 'light';
+        lightBox.style.display = light ? '' : 'none';
+        sendNote.textContent = light
+            ? '고른 것만 보내서 훨씬 싸요. 대신 프리셋과 다른 확장이 넣는 내용(기억, 요약 등)은 빠져요.'
+            : '평소 생성처럼 카드, 월드인포, 프리셋, 채팅 기록을 전부 보내요. 한 줄만 바꿔도 비용은 거의 한 번 생성한 만큼이에요.';
+        if (light && !wiBooks && !wiSeq) loadWi();
         resultRowContinue.style.display = replace ? 'none' : '';
         resultRowReplace.style.display = replace ? '' : 'none';
         dirArea.placeholder = replace
@@ -856,7 +962,7 @@ async function openPopup(mesId) {
     const direction = await prepareDirection(dirArea.value);
     if (direction === null) return;
     if (state.mode === 'replace') {
-        await runReplace({ mesId, a: state.a, b: state.b, direction, rawDirection: dirArea.value, resultMode: state.replaceResult });
+        await runReplace({ mesId, a: state.a, b: state.b, direction, rawDirection: dirArea.value, resultMode: state.replaceResult, light: state.send === 'light' });
     } else {
         await runRewrite({
             mesId,
@@ -1004,6 +1110,117 @@ function replaceInstruction(raw, a, b, direction) {
         after: after.length > 800 ? after.slice(0, 800) + '…' : after,
         direction: String(direction ?? '').trim(),
     });
+}
+
+// ---------- light send (replace mode) ----------
+// Instead of everything ST would build, send only the card parts, world-info entries and
+// recent messages the user keeps. Manual entry picks are remembered per chat.
+const WI_META = 'mid_reroll_wi';
+const LIGHT_PARTS = [
+    ['description', '캐릭터 설명'],
+    ['personality', '캐릭터 성격'],
+    ['scenario', '시나리오'],
+    ['persona', '페르소나 설명'],
+];
+
+function subText(t) {
+    try { return ctx().substituteParams(String(t ?? '')); } catch { return String(t ?? ''); }
+}
+
+/** Earlier chat messages (oldest first) sent along in light mode. */
+function recentMessages(mesId, n) {
+    n = Math.max(0, Number(n) || 0);
+    if (!n) return [];
+    return ctx().chat.slice(0, mesId).filter((m) => !m.is_system && String(m.mes ?? '').trim()).slice(-n);
+}
+
+function keyMatches(key, text) {
+    key = subText(key).trim();
+    if (!key) return false;
+    const re = key.match(/^\/([\s\S]+)\/([a-z]*)$/);
+    if (re) { try { return new RegExp(re[1], re[2]).test(text); } catch { return false; } }
+    return text.toLowerCase().includes(key.toLowerCase());
+}
+
+function wiOverrides() {
+    const meta = ctx().chatMetadata;
+    return meta && typeof meta[WI_META] === 'object' && meta[WI_META] ? meta[WI_META] : {};
+}
+
+function setWiOverrides(map) {
+    const c = ctx();
+    if (!c.chatMetadata) return;
+    if (map && Object.keys(map).length) c.chatMetadata[WI_META] = map;
+    else delete c.chatMetadata[WI_META];
+    (c.saveMetadataDebounced ?? c.saveMetadata)?.();
+}
+
+/**
+ * World-info entries of the active books. Auto pick: always-on entries and ones whose keyword
+ * shows up in the text that light mode sends; a manual pick for this chat wins over that.
+ */
+async function lightWorldInfo(mesId, turns) {
+    const c = ctx();
+    const scan = [...recentMessages(mesId, turns).map((m) => m.mes), c.chat[mesId]?.mes ?? ''].join('\n');
+    const over = wiOverrides();
+    const books = [];
+    for (const name of await activeBookNames()) {
+        let data = null;
+        try { data = await c.loadWorldInfo(name); } catch { /* missing book */ }
+        const entries = Object.values(data?.entries ?? {})
+            .filter((e) => !e?.disable && String(e?.content ?? '').trim())
+            .sort((x, y) => (Number(x.order) || 0) - (Number(y.order) || 0))
+            .map((e) => {
+                const keys = Array.isArray(e.key) ? e.key : [];
+                const why = e.constant ? 'constant' : keys.some((k) => keyMatches(k, scan)) ? 'key' : '';
+                const id = `${name}::${e.uid}`;
+                const manual = Object.hasOwn(over, id);
+                return {
+                    id, why, manual,
+                    picked: manual ? !!over[id] : !!why,
+                    label: String(e.comment || keys.join(', ') || `#${e.uid}`),
+                    content: e.content,
+                };
+            });
+        if (entries.length) books.push({ name, entries });
+    }
+    return books;
+}
+
+/** Chat-completion style messages for a light replace: background, a few recent turns, the rewrite instruction. */
+async function buildLightPrompt(mesId, instr) {
+    const c = ctx();
+    const s = getSettings();
+    let f = {};
+    try { f = c.getCharacterCardFields?.() ?? {}; } catch { /* group chat or no card */ }
+    const charName = c.name2 || 'Character';
+    const userName = c.name1 || 'User';
+    const head = {
+        description: `[${charName}]`,
+        personality: `[${charName}'s personality]`,
+        scenario: '[Scenario]',
+        persona: `[${userName}]`,
+    };
+    const blocks = [];
+    for (const [k] of LIGHT_PARTS) {
+        const text = subText(f[k]).trim();
+        if (s.lightParts[k] && text) blocks.push(`${head[k]}\n${text}`);
+    }
+    const wi = (await lightWorldInfo(mesId, s.lightTurns))
+        .flatMap((b) => b.entries.filter((e) => e.picked))
+        .map((e) => subText(e.content).trim())
+        .filter(Boolean);
+    if (wi.length) blocks.push(`[World info]\n${wi.join('\n\n')}`);
+
+    const messages = [];
+    if (blocks.length) {
+        messages.push({ role: 'system', content: `Background of the story between ${charName} and ${userName}.\n\n${blocks.join('\n\n')}` });
+    }
+    for (const m of recentMessages(mesId, s.lightTurns)) {
+        messages.push({ role: m.is_user ? 'user' : 'assistant', content: String(m.mes) });
+    }
+    messages.push({ role: 'user', content: instr });
+    return messages;
 }
 
 async function runRewrite({ mesId, cut, insert, direction, rawDirection, insertMode, resultMode }) {
@@ -1208,12 +1425,13 @@ async function addUserMessage(text) {
 // Builds the exact prompt the next run would send (ST dry run), then checks which pieces made it in.
 
 /** Dry-runs the prompt for the current popup choices. Message/chat changes are temporary and undone at once. */
-async function buildPreviewPrompt({ mesId, mode, a, b, insert, insertMode, direction }) {
+async function buildPreviewPrompt({ mesId, mode, a, b, insert, insertMode, direction, light = false }) {
     const c = ctx();
     const msg = c.chat[mesId];
     const raw = String(msg.mes ?? '');
     if (mode === 'replace') {
         const quietInstr = replaceInstruction(raw, a, b, direction);
+        if (light) return { prompt: await buildLightPrompt(mesId, quietInstr), extPrompts: {}, quietInstr, light: true };
         const prompt = await capturePrompt('quiet', { quiet_prompt: quietInstr });
         return { prompt, extPrompts: c.extensionPrompts ?? {}, quietInstr };
     }
@@ -1354,11 +1572,14 @@ async function showPromptPreview(choice) {
         el('span', { text: label }),
         el('span', { class: 'mr-pv-state', text: state === true ? '들어감' : state === false ? '안 들어감' : '비어 있음' }));
 
-    const where = {
-        current: '현재 연결로 보낼 프롬프트예요. 실제로 생성할 때도 실리태번이 똑같이 만들어요.',
-        profile: `이 프롬프트를 그대로 저장 프로필(${apiDescription().replace(/^저장 프로필:? ?/, '')})로 보내요.`,
-        custom: '이 프롬프트를 그대로 커스텀 API로 보내요.',
-    }[s.apiMode] ?? '';
+    const light = choice.mode === 'replace' && choice.light;
+    const where = light
+        ? `가볍게 보내기: 고른 카드 항목, 월드인포, 앞 대화 ${Math.max(0, Number(s.lightTurns) || 0)}개, 갈아끼우기 지시만 보내요. 프리셋과 다른 확장이 넣는 내용은 빠져요. (${apiDescription()})`
+        : ({
+            current: '현재 연결로 보낼 프롬프트예요. 실제로 생성할 때도 실리태번이 똑같이 만들어요.',
+            profile: `이 프롬프트를 그대로 저장 프로필(${apiDescription().replace(/^저장 프로필:? ?/, '')})로 보내요.`,
+            custom: '이 프롬프트를 그대로 커스텀 API로 보내요.',
+        }[s.apiMode] ?? '');
 
     const bookBlocks = info.books.length
         ? info.books.map((b) => el('div', { class: 'mr-pv-book' },
@@ -1399,7 +1620,7 @@ async function showPromptPreview(choice) {
 }
 
 // ---------- replace mode ----------
-async function runReplace({ mesId, a, b, direction, rawDirection, resultMode }) {
+async function runReplace({ mesId, a, b, direction, rawDirection, resultMode, light = false }) {
     const c = ctx();
     const chat = c.chat;
     const msg = chat[mesId];
@@ -1419,7 +1640,7 @@ async function runReplace({ mesId, a, b, direction, rawDirection, resultMode }) 
     for (;;) {
         busy = true;
         try {
-            candidate = cleanReplacement(await generateReplacement(instr), before, after);
+            candidate = cleanReplacement(await generateReplacement(instr, { mesId, light }), before, after);
         } catch (err) {
             console.error(LOG, err);
             if (err?.name !== 'AbortError') toastr.error(String(err?.message || err), '부분 갈아끼우기 실패');
@@ -1473,9 +1694,22 @@ function cleanReplacement(text, before, after) {
     return t;
 }
 
-async function generateReplacement(instr) {
+async function generateReplacement(instr, { mesId, light = false } = {}) {
     const c = ctx();
     const s = getSettings();
+    if (light) {
+        const messages = await buildLightPrompt(mesId, instr);
+        if (s.apiMode === 'current') {
+            showBusy(() => { try { c.stopGeneration(); } catch { /* ignore */ } });
+            return c.generateRaw({ prompt: messages, responseLength: Number(s.maxTokens) > 0 ? Number(s.maxTokens) : null });
+        }
+        const ac = new AbortController();
+        showBusy(() => ac.abort());
+        const res = s.apiMode === 'profile'
+            ? await profileCall(s.profileId, messages, genMaxTokens(), { signal: ac.signal })
+            : await customCall(messages, genMaxTokens(), { signal: ac.signal });
+        return readResult(res);
+    }
     if (s.apiMode === 'current') {
         showBusy(() => { try { c.stopGeneration(); } catch { /* ignore */ } });
         return c.generateQuietPrompt({
@@ -1898,6 +2132,8 @@ function buildSettings() {
             field('끼워넣기 기본값', select('insertMode', [['inline', 'AI 답변 안에 넣기'], ['separate', '유저 메시지로 따로 넣기']])),
             field('다시 쓰기 결과', select('resultMode', [['swipe', '새 스와이프로 추가 (원본 유지)'], ['overwrite', '덮어쓰기 (원본은 되돌리기용으로 보관)']])),
             field('갈아끼우기 결과', select('replaceResult', [['overwrite', '덮어쓰기 (원본은 되돌리기용으로 보관)'], ['swipe', '새 스와이프로 추가 (원본 유지)']])),
+            field('갈아끼우기 보내는 양', select('replaceSend', [['full', '전부 보내기 (평소 생성과 같음)'], ['light', '가볍게 보내기 (고른 것만, 저렴)']]),
+                '가볍게 보낼 때 넣을 카드 항목, 월드인포, 앞 대화 개수는 창에서 골라요.'),
             check('announceAsNew', '갈아끼운 뒤 다른 확장에 "새 답변"으로 알리기'),
             el('small', { class: 'mr-note', text: '끄면 연필로 고친 것처럼 "수정됨"으로 알려요. 기억·상태창 확장 대부분은 이것만으로 새 글을 다시 읽어요. 켜면 새 답변에만 도는 기능(답변 점검, 상태 갱신, 자동 재생 등)도 다시 돌아요. 대신 확장에 따라 같은 답변을 한 번 더 처리해서 모델 호출이 늘 수 있어요.' }),
             field('✂ 버튼 위치', select('buttonPlace', [['bar', '메시지 위 버튼 줄에 바로'], ['menu', '··· 메뉴 안에'], ['both', '둘 다']], addButtons),
