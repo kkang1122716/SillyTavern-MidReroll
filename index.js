@@ -1650,7 +1650,9 @@ function buildSettings() {
     const group = (title, ...kids) => el('div', { class: 'mr-group' }, el('div', { class: 'mr-group-title', text: title }), ...kids);
     const fold = (title, ...kids) => el('details', { class: 'mr-group mr-adv' }, el('summary', { class: 'mr-group-title', text: title }), ...kids);
 
-    const content = el('div', { class: 'inline-drawer-content mr-settings' },
+    // Layout lives on an inner box: a display rule on .inline-drawer-content would override ST's
+    // default "closed" state and make the drawer start open.
+    const content = el('div', { class: 'inline-drawer-content' }, el('div', { class: 'mr-settings' },
         group('기본 동작',
             field('창을 열면 먼저 보일 방식', select('defaultMode', [['continue', '✂ 여기서부터 다시 쓰기'], ['replace', '🔁 부분만 갈아끼우기']]), '창 안에서 언제든 바꿀 수 있어요.'),
             field('고르는 방법', select('cutMode', [['both', '문단 클릭 + 드래그 선택 (둘 다)'], ['paragraph', '문단 클릭만'], ['select', '드래그·글자 위치만']])),
@@ -1691,7 +1693,7 @@ function buildSettings() {
             check('trimOverlap', '모델이 앞부분을 반복하면 자동으로 잘라내기'),
             resetTpl,
         ),
-    );
+    ));
 
     const drawer = el('div', { id: 'mid_reroll_settings', class: 'inline-drawer' },
         el('div', { class: 'inline-drawer-toggle inline-drawer-header' },
