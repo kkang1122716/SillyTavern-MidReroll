@@ -107,6 +107,7 @@ const defaultSettings = Object.freeze({
     trPrompt: DEFAULT_TR_PROMPT,
     trCache: false,
     reviewContinue: 'foreign', // foreign | always | never
+    announceAsNew: false,     // after a replace: send "new reply" signals instead of "edited"
     autoTranslateResult: true,
     injectDepth: 0,
     trimOverlap: true,
@@ -402,6 +403,26 @@ function announceEdit(mesId) {
         .then(() => c.eventSource.emit(c.eventTypes.MESSAGE_EDITED, mesId))
         .then(() => c.eventSource.emit(c.eventTypes.MESSAGE_UPDATED, mesId))
         .catch((e) => console.warn(LOG, 'edit event failed', e));
+}
+
+/**
+ * Opt-in: tell other extensions this is a freshly generated reply (like ST does after a generation), so
+ * features that only run on new replies (per-turn checks, state trackers, auto-play) run again.
+ * MESSAGE_EDITED is left out on purpose: extensions that handle both would process the reply twice.
+ */
+function announceNew(mesId, type) {
+    const c = ctx();
+    Promise.resolve()
+        .then(() => c.eventSource.emit(c.eventTypes.MESSAGE_RECEIVED, mesId, type))
+        .then(() => c.eventSource.emit(c.eventTypes.CHARACTER_MESSAGE_RENDERED, mesId, type))
+        .then(() => c.eventSource.emit(c.eventTypes.MESSAGE_UPDATED, mesId))
+        .catch((e) => console.warn(LOG, 'new-reply event failed', e));
+}
+
+/** Which signal to send after the extension itself changed or produced a reply. */
+function announceResult(mesId, type) {
+    if (getSettings().announceAsNew) announceNew(mesId, type);
+    else announceEdit(mesId);
 }
 
 // ---------- chat selection tracking (for "drag in chat, then press the button") ----------
@@ -1029,7 +1050,9 @@ async function runRewrite({ mesId, cut, insert, direction, rawDirection, insertM
         await rerender(mesId);
         await c.saveChat();
     }
-    announceEdit(mesId);
+    // The current connection already sent ST's own "new reply (continue)" signals; the others did not
+    if (s.apiMode === 'current') announceEdit(mesId);
+    else announceResult(mesId, 'continue');
 
     // 6) Optional check window (with translation) for the newly written part
     const newPart = finalText.slice(kept.length).trim();
@@ -1189,7 +1212,7 @@ async function runReplace({ mesId, a, b, direction, rawDirection, resultMode }) 
     }
     await rerender(mesId);
     await c.saveChat();
-    announceEdit(mesId);
+    announceResult(mesId, resultMode === 'swipe' ? 'swipe' : 'normal');
     const start = before.length + lead.length;
     lastRun = { ...lastRun, a: start, b: start + candidate.length, text: candidate };
     toastr.success(resultMode === 'swipe' ? '바꾼 답변을 새 스와이프로 넣었어요.' : '그 부분만 갈아끼웠어요.');
@@ -1634,6 +1657,8 @@ function buildSettings() {
             field('끼워넣기 기본값', select('insertMode', [['inline', 'AI 답변 안에 넣기'], ['separate', '유저 메시지로 따로 넣기']])),
             field('다시 쓰기 결과', select('resultMode', [['swipe', '새 스와이프로 추가 (원본 유지)'], ['overwrite', '덮어쓰기 (원본은 되돌리기용으로 보관)']])),
             field('갈아끼우기 결과', select('replaceResult', [['overwrite', '덮어쓰기 (원본은 되돌리기용으로 보관)'], ['swipe', '새 스와이프로 추가 (원본 유지)']])),
+            check('announceAsNew', '갈아끼운 뒤 다른 확장에 "새 답변"으로 알리기'),
+            el('small', { class: 'mr-note', text: '끄면 연필로 고친 것처럼 "수정됨"으로 알려요. 기억·상태창 확장 대부분은 이것만으로 새 글을 다시 읽어요. 켜면 새 답변에만 도는 기능(답변 점검, 상태 갱신, 자동 재생 등)도 다시 돌아요. 대신 확장에 따라 같은 답변을 한 번 더 처리해서 모델 호출이 늘 수 있어요.' }),
             field('✂ 버튼 위치', select('buttonPlace', [['bar', '메시지 위 버튼 줄에 바로'], ['menu', '··· 메뉴 안에'], ['both', '둘 다']], addButtons),
                 '버튼이 안 보이면 "버튼 줄에 바로"로 두세요. 마법봉(확장) 메뉴와 /midreroll 로도 열 수 있어요.'),
         ),
