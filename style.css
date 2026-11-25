@@ -367,6 +367,92 @@
     text-decoration: underline;
 }
 
+/* prompt preview */
+.mr-pv-total {
+    font-weight: 600;
+    font-size: 0.9em;
+}
+
+.mr-pv-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 0.9em;
+    padding: 2px 0;
+}
+
+.mr-pv-icon {
+    width: 1.4em;
+    text-align: center;
+    flex: none;
+}
+
+.mr-pv-state {
+    margin-left: auto;
+    font-size: 0.85em;
+    opacity: 0.7;
+    white-space: nowrap;
+}
+
+.mr-pv-empty {
+    opacity: 0.55;
+}
+
+.mr-pv-out .mr-pv-state {
+    color: #d9534f;
+    opacity: 1;
+}
+
+.mr-pv-entries {
+    margin: 0 0 4px 2.2em;
+    font-size: 0.82em;
+    opacity: 0.75;
+    line-height: 1.45;
+}
+
+.mr-pv-full {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    max-height: 50vh;
+    overflow-y: auto;
+}
+
+.mr-pv-msg {
+    border: 1px solid var(--SmartThemeBorderColor);
+    border-radius: 8px;
+    padding: 6px 8px;
+}
+
+.mr-pv-role {
+    display: inline-block;
+    font-size: 0.75em;
+    font-weight: 600;
+    padding: 0 6px;
+    border-radius: 6px;
+    margin-bottom: 4px;
+    background: var(--SmartThemeBorderColor);
+}
+
+.mr-pv-role-system {
+    background: color-mix(in srgb, #e0a526 35%, transparent);
+}
+
+.mr-pv-role-user {
+    background: color-mix(in srgb, #4c8bf5 35%, transparent);
+}
+
+.mr-pv-role-assistant {
+    background: color-mix(in srgb, #4caf7d 35%, transparent);
+}
+
+.mr-pv-text {
+    white-space: pre-wrap;
+    font-size: 0.85em;
+    line-height: 1.45;
+    word-break: break-word;
+}
+
 /* busy bar */
 .mr-busy {
     position: fixed;

@@ -609,6 +609,28 @@ async function openPopup(mesId) {
     const apiLabel = el('span', { class: 'mr-api', text: apiDescription() });
 
     const backup = msg.extra?.mid_reroll_backup;
+    const previewBtn = el('button', {
+        type: 'button', class: 'mr-link', text: '📋 보낼 프롬프트 확인 (월드인포·페르소나·카드 등)',
+        onclick: async () => {
+            const replace = state.mode === 'replace';
+            if (state.a == null || (replace && (state.b == null || state.b <= state.a))) {
+                return toastr.warning(replace ? '바꿀 부분을 먼저 골라 주세요.' : '다시 쓰기 시작할 위치를 먼저 골라 주세요.');
+            }
+            if (!replace && state.a === 0 && !(insertArea.value.trim() && state.insertMode === 'inline')) {
+                return toastr.warning('앞부분을 조금이라도 남겨야 미리 볼 수 있어요.');
+            }
+            previewBtn.disabled = true;
+            try {
+                await showPromptPreview({
+                    mesId, mode: state.mode, a: state.a, b: state.b,
+                    insert: insertArea.value, insertMode: state.insertMode, direction: dirArea.value,
+                });
+            } finally {
+                previewBtn.disabled = false;
+            }
+        },
+    });
+
     const restoreBtn = backup ? el('button', {
         type: 'button', class: 'mr-link', text: '↩ 덮어쓰기 전 원본으로 되돌리기',
         onclick: async () => {
@@ -636,6 +658,7 @@ async function openPopup(mesId) {
         el('div', { class: 'mr-foot' },
             resultRowContinue, resultRowReplace,
             el('div', { class: 'mr-row' }, el('span', { class: 'mr-small', text: 'API' }), apiLabel),
+            previewBtn,
             restoreBtn),
     );
 
@@ -848,13 +871,13 @@ async function openPopup(mesId) {
 }
 
 /** Translates the direction into the chosen prompt language when it is written in another one. */
-async function prepareDirection(text) {
+async function prepareDirection(text, { quiet = false } = {}) {
     const s = getSettings();
     text = String(text ?? '').trim();
     if (!text || !s.dirAutoTranslate || isLang(text, s.dirLang)) return text;
     try {
         const out = await translate(text, DIR_CODE[s.dirLang]);
-        toastr.info(out, '지시를 번역해서 보내요', { timeOut: 4000 });
+        if (!quiet) toastr.info(out, '지시를 번역해서 보내요', { timeOut: 4000 });
         return out;
     } catch (e) {
         console.warn(LOG, e);
@@ -941,6 +964,48 @@ async function restoreBackup(mesId) {
 }
 
 // ---------- continue mode ----------
+/** What stays in the message, and how the continuation joins it. */
+function planContinue(raw, cut, insert, insertMode) {
+    const before = raw.slice(0, cut);
+    let kept = before.replace(/\s+$/, '');
+    const gap = before.slice(kept.length);
+    const sep = paraSeparator(raw);
+    let joiner = gap.includes('\n') ? sep : (gap ? ' ' : '');
+    insert = String(insert ?? '').trim();
+    const inline = !!insert && insertMode === 'inline';
+    const separate = !!insert && insertMode === 'separate';
+    // The kept part ends here for good (something follows it), so close an open *italic* or "quote"
+    if (kept && insert) kept = closeOpenMarks(kept);
+    if (inline) {
+        kept = kept ? kept + sep + insert : insert;
+        joiner = sep;
+    }
+    return { kept, joiner, inline, separate, insert };
+}
+
+/** One-shot direction (and the inline-insert note) for the next generation only. Returns whether anything was set. */
+function injectDirection(direction, inline) {
+    const s = getSettings();
+    const p = pack();
+    const lines = [];
+    if (direction) lines.push(fill(p.template, { direction }));
+    if (inline) lines.push(p.insertNote);
+    if (!lines.length) return false;
+    ctx().setExtensionPrompt(PROMPT_KEY, lines.join('\n'), IN_CHAT, Number(s.injectDepth) || 0, false, ROLE_SYSTEM);
+    return true;
+}
+
+function replaceInstruction(raw, a, b, direction) {
+    const before = raw.slice(0, a);
+    const after = raw.slice(b);
+    return fill(pack().rewrite, {
+        before: before.length > 800 ? '…' + before.slice(-800) : before,
+        passage: raw.slice(a, b).trim(),
+        after: after.length > 800 ? after.slice(0, 800) + '…' : after,
+        direction: String(direction ?? '').trim(),
+    });
+}
+
 async function runRewrite({ mesId, cut, insert, direction, rawDirection, insertMode, resultMode }) {
     const c = ctx();
     const s = getSettings();
@@ -949,21 +1014,10 @@ async function runRewrite({ mesId, cut, insert, direction, rawDirection, insertM
     if (!msg || mesId !== chat.length - 1) return toastr.warning('그사이 채팅이 바뀌었어요. 다시 열어 주세요.');
 
     const raw = String(msg.mes ?? '');
-    const before = raw.slice(0, cut);
-    let kept = before.replace(/\s+$/, '');
-    const gap = before.slice(kept.length);
-    const sep = paraSeparator(raw);
-    let joiner = gap.includes('\n') ? sep : (gap ? ' ' : '');
-    insert = String(insert ?? '').trim();
     direction = String(direction ?? '').trim();
-    const inline = !!insert && insertMode === 'inline';
-    const separate = !!insert && insertMode === 'separate';
-
-    if (kept && insert) kept = closeOpenMarks(kept);
-    if (inline) {
-        kept = kept ? kept + sep + insert : insert;
-        joiner = sep;
-    }
+    const plan = planContinue(raw, cut, insert, insertMode);
+    const { kept, joiner, inline, separate } = plan;
+    insert = plan.insert;
     if (!kept) return toastr.warning('남길 부분이 없어요.');
 
     lastRun = { chatId: c.chatId, mesId, mode: 'continue', kept: raw.slice(0, cut), insert, direction: rawDirection ?? direction };
@@ -988,11 +1042,7 @@ async function runRewrite({ mesId, cut, insert, direction, rawDirection, insertM
         await c.saveChat();
 
         // 2) One-shot direction for this generation only
-        const p = pack();
-        const lines = [];
-        if (direction) lines.push(fill(p.template, { direction }));
-        if (inline) lines.push(p.insertNote);
-        if (lines.length) c.setExtensionPrompt(PROMPT_KEY, lines.join('\n'), IN_CHAT, Number(s.injectDepth) || 0, false, ROLE_SYSTEM);
+        injectDirection(direction, inline);
 
         // 3) Separate mode: the user's passage becomes its own message
         let genType = 'continue';
@@ -1154,6 +1204,200 @@ async function addUserMessage(text) {
     await c.saveChat();
 }
 
+// ---------- prompt preview ----------
+// Builds the exact prompt the next run would send (ST dry run), then checks which pieces made it in.
+
+/** Dry-runs the prompt for the current popup choices. Message/chat changes are temporary and undone at once. */
+async function buildPreviewPrompt({ mesId, mode, a, b, insert, insertMode, direction }) {
+    const c = ctx();
+    const msg = c.chat[mesId];
+    const raw = String(msg.mes ?? '');
+    if (mode === 'replace') {
+        const quietInstr = replaceInstruction(raw, a, b, direction);
+        const prompt = await capturePrompt('quiet', { quiet_prompt: quietInstr });
+        return { prompt, extPrompts: c.extensionPrompts ?? {}, quietInstr };
+    }
+    const plan = planContinue(raw, a, insert, insertMode);
+    const undo = [];
+    try {
+        msg.mes = plan.kept;
+        undo.push(() => { msg.mes = raw; });
+        if (injectDirection(direction, plan.inline)) undo.push(() => c.setExtensionPrompt(PROMPT_KEY, '', IN_CHAT, 0));
+        let type = 'continue';
+        if (plan.separate) {
+            c.chat.push({ name: c.name1, is_user: true, is_system: false, send_date: new Date().toISOString(), mes: plan.insert, extra: {} });
+            undo.push(() => c.chat.pop());
+            type = 'normal';
+        }
+        const prompt = await capturePrompt(type);
+        // Keep what was injected for this run before the temporary direction is cleared again
+        return { prompt, extPrompts: structuredClone(c.extensionPrompts ?? {}) };
+    } finally {
+        for (const f of undo.reverse()) { try { f(); } catch { /* keep undoing */ } }
+    }
+}
+
+function contentText(content) {
+    if (typeof content === 'string') return content;
+    if (Array.isArray(content)) return content.map((p) => (typeof p === 'string' ? p : p?.text ?? '')).join('\n');
+    return String(content ?? '');
+}
+
+/** World books that can feed this chat: global, character (main + extra), chat-bound, persona-bound. */
+async function activeBookNames() {
+    const c = ctx();
+    const names = new Set();
+    try {
+        const wi = await import('../../../world-info.js');
+        (wi.selected_world_info ?? []).forEach((n) => names.add(n));
+        const ch = c.characters?.[c.characterId];
+        const main = ch?.data?.extensions?.world;
+        if (main) names.add(main);
+        const file = String(ch?.avatar ?? '').replace(/\.[^.]+$/, '');
+        (wi.world_info?.charLore?.find((e) => e.name === file)?.extraBooks ?? []).forEach((n) => names.add(n));
+        const chatBook = c.chatMetadata?.[wi.METADATA_KEY ?? 'world_info'];
+        if (chatBook) names.add(chatBook);
+    } catch (e) {
+        console.warn(LOG, 'world info list unavailable', e);
+    }
+    const personaBook = c.powerUserSettings?.persona_description_lorebook;
+    if (personaBook) names.add(personaBook);
+    return [...names].filter(Boolean);
+}
+
+const EXT_PROMPT_NAMES = {
+    '1_memory': '요약 (Summarize)',
+    '2_floating_prompt': '작가 노트',
+    '3_vectors': '채팅 벡터 기억',
+    '4_vectors_data_bank': '데이터 뱅크',
+    chromadb: '스마트 컨텍스트',
+    DEPTH_PROMPT: '캐릭터 노트 (깊이 프롬프트)',
+    [PROMPT_KEY]: '✂ 중간 리롤 지시 (이번에만)',
+};
+
+async function analyzePrompt(prompt, extPrompts, quietInstr) {
+    const c = ctx();
+    const parts = Array.isArray(prompt)
+        ? prompt.map((m) => ({ role: String(m?.role ?? ''), text: contentText(m?.content) }))
+        : [{ role: '', text: String(prompt ?? '') }];
+    const full = parts.map((p) => p.text).join('\n');
+    const norm = (t) => String(t ?? '').replace(/\s+/g, ' ').trim();
+    const hay = norm(full);
+    /** true/false when the text is (not) in the prompt, null when there is nothing to look for. */
+    const has = (t) => {
+        const n = norm(Array.isArray(t) ? t.join('\n') : t);
+        if (!n) return null;
+        if (n.length <= 50) return hay.includes(n);
+        const w = 40;
+        const probes = [n.slice(0, w), n.slice(Math.floor(n.length / 2), Math.floor(n.length / 2) + w), n.slice(-w)];
+        return probes.some((p) => hay.includes(p));
+    };
+
+    let f = {};
+    try { f = c.getCharacterCardFields?.() ?? {}; } catch { /* group chat or no card */ }
+    const card = [
+        ['캐릭터 설명', f.description],
+        ['캐릭터 성격', f.personality],
+        ['시나리오', f.scenario],
+        ['예시 대화', f.mesExamples],
+        ['캐릭터 노트 (깊이 프롬프트)', f.charDepthPrompt],
+        ['캐릭터 카드의 시스템 프롬프트', f.system],
+        ['캐릭터 카드의 Post-History 지시', f.jailbreak],
+        ['페르소나 설명', f.persona],
+    ].map(([label, text]) => ({ label, state: has(text) }));
+
+    const books = [];
+    for (const name of await activeBookNames()) {
+        let data = null;
+        try { data = await c.loadWorldInfo(name); } catch { /* missing book */ }
+        const entries = Object.values(data?.entries ?? {}).filter((e) => !e?.disable && String(e?.content ?? '').trim());
+        const sub = (t) => { try { return c.substituteParams(t); } catch { return t; } };
+        const inPrompt = entries.filter((e) => has(sub(e.content)))
+            .map((e) => String(e.comment || (Array.isArray(e.key) ? e.key.join(', ') : '') || `#${e.uid}`));
+        books.push({ name, total: entries.length, inPrompt });
+    }
+
+    const ext = Object.entries(extPrompts ?? c.extensionPrompts ?? {})
+        .filter(([k, v]) => String(v?.value ?? '').trim() && !/^customDepthWI/i.test(k))
+        .map(([k, v]) => ({ label: EXT_PROMPT_NAMES[k] ?? k, state: has(v.value) }));
+    if (quietInstr) ext.push({ label: '🔁 부분 갈아끼우기 지시 (이번에만)', state: has(quietInstr) });
+
+    const chatMsgs = c.chat.filter((m) => !m.is_system && String(m.mes ?? '').trim());
+    const chatIn = chatMsgs.filter((m) => has(m.mes)).length;
+
+    let tokens = null;
+    try { tokens = await c.getTokenCountAsync(full); } catch { /* tokenizer unavailable */ }
+    return { parts, full, card, books, ext, chatTotal: chatMsgs.length, chatIn, tokens };
+}
+
+async function showPromptPreview(choice) {
+    const c = ctx();
+    const s = getSettings();
+    const wait = toastr.info('프롬프트를 만드는 중…', '', { timeOut: 0, extendedTimeOut: 0 });
+    let info;
+    try {
+        const direction = await prepareDirection(choice.direction, { quiet: true });
+        const built = await buildPreviewPrompt({ ...choice, direction });
+        const prompt = built?.prompt;
+        if (!prompt || (Array.isArray(prompt) && !prompt.length)) throw new Error('프롬프트를 만들지 못했어요.');
+        info = await analyzePrompt(prompt, built.extPrompts, built.quietInstr);
+    } catch (e) {
+        console.error(LOG, e);
+        toastr.error(String(e?.message || e), '프롬프트 확인 실패');
+        return;
+    } finally {
+        toastr.clear(wait);
+    }
+
+    const row = (label, state) => el('div', { class: `mr-pv-row mr-pv-${state === true ? 'in' : state === false ? 'out' : 'empty'}` },
+        el('span', { class: 'mr-pv-icon', text: state === true ? '✅' : state === false ? '❌' : '➖' }),
+        el('span', { text: label }),
+        el('span', { class: 'mr-pv-state', text: state === true ? '들어감' : state === false ? '안 들어감' : '비어 있음' }));
+
+    const where = {
+        current: '현재 연결로 보낼 프롬프트예요. 실제로 생성할 때도 실리태번이 똑같이 만들어요.',
+        profile: `이 프롬프트를 그대로 저장 프로필(${apiDescription().replace(/^저장 프로필:? ?/, '')})로 보내요.`,
+        custom: '이 프롬프트를 그대로 커스텀 API로 보내요.',
+    }[s.apiMode] ?? '';
+
+    const bookBlocks = info.books.length
+        ? info.books.map((b) => el('div', { class: 'mr-pv-book' },
+            el('div', { class: 'mr-pv-row' },
+                el('span', { class: 'mr-pv-icon', text: b.inPrompt.length ? '📖' : '📕' }),
+                el('span', { text: b.name }),
+                el('span', { class: 'mr-pv-state', text: `${b.total}개 중 ${b.inPrompt.length}개 들어감` })),
+            b.inPrompt.length ? el('div', { class: 'mr-pv-entries', text: b.inPrompt.join(' · ') }) : null))
+        : [el('div', { class: 'mr-small', text: '켜져 있는 월드인포가 없어요.' })];
+
+    const fullList = el('div', { class: 'mr-pv-full' }, info.parts.map((p) => el('div', { class: 'mr-pv-msg' },
+        p.role ? el('div', { class: `mr-pv-role mr-pv-role-${p.role}`, text: p.role }) : null,
+        el('div', { class: 'mr-pv-text', text: p.text }))));
+    const copyBtn = el('button', { type: 'button', class: 'mr-chip', onclick: async () => {
+        const text = info.parts.map((p) => (p.role ? `[${p.role}]\n${p.text}` : p.text)).join('\n\n');
+        try { await navigator.clipboard.writeText(text); toastr.success('복사했어요.'); } catch { toastr.warning('복사하지 못했어요.'); }
+    } }, el('i', { class: 'fa-solid fa-copy' }), ' 전체 복사');
+
+    const root = el('div', { class: 'mr-popup mr-pv' },
+        el('div', { class: 'mr-title' }, el('i', { class: 'fa-solid fa-list-check' }), ' 보낼 프롬프트 확인'),
+        el('div', { class: 'mr-small', text: where }),
+        el('div', { class: 'mr-pv-total', text: [
+            info.tokens != null ? `약 ${info.tokens.toLocaleString()} 토큰` : null,
+            info.parts.length > 1 ? `메시지 ${info.parts.length}개` : null,
+            `채팅 기록 ${info.chatTotal}개 중 ${info.chatIn}개`,
+        ].filter(Boolean).join(' · ') }),
+        el('div', { class: 'mr-section' }, el('div', { class: 'mr-label', text: '캐릭터 카드 · 페르소나' }), info.card.map((x) => row(x.label, x.state))),
+        el('div', { class: 'mr-section' }, el('div', { class: 'mr-label', text: '월드인포 (로어북)' }), bookBlocks),
+        el('div', { class: 'mr-section' }, el('div', { class: 'mr-label', text: '확장·기능이 끼워넣은 내용' }),
+            info.ext.length ? info.ext.map((x) => row(x.label, x.state)) : el('div', { class: 'mr-small', text: '없어요.' })),
+        el('small', { class: 'mr-note', text: '본문이 프롬프트 안에 그대로 있는지 찾아본 결과예요. 프리셋이나 확장이 모양을 바꿔서 넣는 항목은 "안 들어감"으로 보일 수 있어요. 채팅 기록은 맥락 길이에 맞춰 오래된 것부터 빠져요. 번역할 때는 이 프롬프트가 아니라 번역할 글만 보내요.' }),
+        el('details', { class: 'mr-group mr-adv' },
+            el('summary', { class: 'mr-group-title', text: '전체 프롬프트 보기' }),
+            el('div', { class: 'mr-inline' }, copyBtn),
+            fullList),
+    );
+    await new c.Popup(root, c.POPUP_TYPE.TEXT, '', { okButton: '닫기', wide: true, large: true, allowVerticalScrolling: true }).show();
+}
+
 // ---------- replace mode ----------
 async function runReplace({ mesId, a, b, direction, rawDirection, resultMode }) {
     const c = ctx();
@@ -1168,12 +1412,7 @@ async function runReplace({ mesId, a, b, direction, rawDirection, resultMode }) 
     const trail = passage.match(/\s*$/)[0];
     const core = passage.trim();
 
-    const instr = fill(pack().rewrite, {
-        before: before.length > 800 ? '…' + before.slice(-800) : before,
-        passage: core,
-        after: after.length > 800 ? after.slice(0, 800) + '…' : after,
-        direction: String(direction ?? '').trim(),
-    });
+    const instr = replaceInstruction(raw, a, b, direction);
     lastRun = { chatId: c.chatId, mesId, mode: 'replace', a, b, text: passage, insert: '', direction: rawDirection ?? direction };
 
     let candidate = '';
